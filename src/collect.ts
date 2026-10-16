@@ -132,6 +132,51 @@ export function readCounterSample(platform: Platform): CounterSample | null {
 
 // ---- disk ----
 
+/**
+ * Sources `df` reports for kernel plumbing rather than real storage. They are
+ * either zero-sized or permanently 100% full, so counting them as disks makes a
+ * healthy host look full — and would report its free space as `0 B`. macOS
+ * `devfs` (mounted on `/dev`) and its `map` entries are the usual offenders,
+ * alongside Linux `tmpfs`.
+ */
+const VIRTUAL_SOURCES = new Set([
+  "devfs", "none", "tmpfs", "devtmpfs", "shm", "ramfs", "sysfs", "proc",
+  "cgroup", "cgroup2", "autofs", "udev", "efivarfs", "nsfs", "tracefs",
+  "debugfs", "pstore", "bpf", "securityfs", "configfs", "fusectl", "mqueue",
+  "hugetlbfs", "binfmt_misc", "sunrpc", "rpc_pipefs", "nfsd",
+]);
+
+/**
+ * Read-only images — a snap's `/dev/loopN`, an AppImage — carry a real-looking
+ * device name but are always 100% used, so they are excluded by mount point.
+ */
+function isVirtualMount(source: string, mount: string): boolean {
+  if (VIRTUAL_SOURCES.has(source)) return true;
+  if (source === "map" || source.startsWith("map ")) return true;
+  return mount === "/snap" || mount.startsWith("/snap/");
+}
+
+/** One `df` row of 1024-byte blocks, or `null` when it is not a real disk. */
+function toMount(source: string, mount: string, blocks: string, used: string, avail: string, pcent: string): DiskMount | null {
+  if (!mount || isVirtualMount(source, mount)) return null;
+  const totalBlocks = Number.parseInt(blocks, 10);
+  const usedBlocks = Number.parseInt(used, 10);
+  const availBlocks = Number.parseInt(avail, 10);
+  if ([totalBlocks, usedBlocks, availBlocks].some((v) => Number.isNaN(v))) return null;
+  const totalBytes = totalBlocks * 1024;
+  // A zero-block mount has no free space to report; it is not a disk.
+  if (totalBytes <= 0) return null;
+  const usage = Number.parseFloat(pcent.replace("%", ""));
+  return {
+    mount,
+    total_bytes: totalBytes,
+    used_bytes: usedBlocks * 1024,
+    available_bytes: availBlocks * 1024,
+    usage_pct: Number.isFinite(usage) ? usage : round((usedBlocks / totalBlocks) * 100),
+  };
+}
+
+/** GNU `df -k --output=...`: source size used avail pcent target. */
 export function parseDfOutput(text: string | null): DiskMount[] {
   if (!text) return [];
   const rows: DiskMount[] = [];
@@ -139,45 +184,24 @@ export function parseDfOutput(text: string | null): DiskMount[] {
     const tokens = line.trim().split(/\s+/);
     if (tokens.length < 6) continue;
     const [source, size, used, avail, pcent, ...rest] = tokens;
-    const mount = rest.join(" ");
-    if (!mount || source === "none") continue;
-    const total = Number.parseInt(size, 10);
-    const usedBytes = Number.parseInt(used, 10);
-    const availBytes = Number.parseInt(avail, 10);
-    if ([total, usedBytes, availBytes].some((v) => Number.isNaN(v))) continue;
-    const usage = Number.parseFloat(pcent.replace("%", ""));
-    rows.push({
-      mount,
-      total_bytes: total * 1024,
-      used_bytes: usedBytes * 1024,
-      available_bytes: availBytes * 1024,
-      usage_pct: Number.isFinite(usage) ? usage : round((usedBytes / total) * 100),
-    });
+    const row = toMount(source, rest.join(" "), size, used, avail, pcent);
+    if (row) rows.push(row);
   }
   return rows;
 }
 
+/** BSD `df -kP`: source blocks used avail pcent target. */
 export function parseDfPosix(text: string | null): DiskMount[] {
   if (!text) return [];
   const rows: DiskMount[] = [];
   for (const line of text.split("\n").slice(1)) {
     const tokens = line.trim().split(/\s+/);
     if (tokens.length < 6) continue;
-    const [, blocks, used, avail, pcent, ...rest] = tokens;
+    const [source, blocks, used, avail, pcent, ...rest] = tokens;
     const mount = rest.join(" ");
-    if (!mount || mount === "on") continue;
-    const total = Number.parseInt(blocks, 10);
-    const usedBytes = Number.parseInt(used, 10);
-    const availBytes = Number.parseInt(avail, 10);
-    if ([total, usedBytes, availBytes].some((v) => Number.isNaN(v))) continue;
-    const usage = Number.parseFloat(pcent.replace("%", ""));
-    rows.push({
-      mount,
-      total_bytes: total * 1024,
-      used_bytes: usedBytes * 1024,
-      available_bytes: availBytes * 1024,
-      usage_pct: Number.isFinite(usage) ? usage : round((usedBytes / total) * 100),
-    });
+    if (mount === "on") continue; // tail of the "Mounted on" header
+    const row = toMount(source, mount, blocks, used, avail, pcent);
+    if (row) rows.push(row);
   }
   return rows;
 }

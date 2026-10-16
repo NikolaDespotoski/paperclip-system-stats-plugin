@@ -11,6 +11,7 @@ import {
   parseUptime,
 } from "../src/collect.js";
 import { parseConfig } from "../src/config.js";
+import { emptyHostStats, fullestMount, toSeriesPoint } from "../src/types.js";
 import {
   DF_OUTPUT,
   FakePlatform,
@@ -129,5 +130,52 @@ describe("collectAllHosts", () => {
     expect(snapshot.hosts.map((h) => h.id)).toEqual(["localhost", "gpu"]);
     expect(snapshot.hosts[0].available).toBe(true);
     expect(snapshot.hosts[1].available).toBe(false);
+  });
+});
+
+describe("pseudo filesystems", () => {
+  // Verbatim `df -kP` from macOS: devfs and the auto_home map both report 100%
+  // while the real data volume has ~172 GiB free.
+  const MACOS_DF = [
+    "Filesystem     1024-blocks      Used Available Capacity  Mounted on",
+    "/dev/disk3s1s1   482797652  12341680 180569808     7%    /",
+    "devfs                  202       202         0   100%    /dev",
+    "/dev/disk3s6     482797652        24 180569808     1%    /System/Volumes/VM",
+    "/dev/disk3s5     482797652 279618992 180569808    61%    /System/Volumes/Data",
+    "map auto_home            0         0         0   100%    /System/Volumes/Data/home",
+  ].join("\n");
+
+  it("excludes synthetic mounts that are permanently 100% full", () => {
+    const mounts = parseDfPosix(MACOS_DF);
+    expect(mounts.map((m) => m.mount)).toEqual(["/", "/System/Volumes/VM", "/System/Volumes/Data"]);
+    expect(mounts.every((m) => m.usage_pct < 100)).toBe(true);
+  });
+
+  it("picks the data volume, not /dev, as the fullest mount", () => {
+    const disk = fullestMount(parseDfPosix(MACOS_DF));
+    expect(disk?.mount).toBe("/System/Volumes/Data");
+    expect(disk?.usage_pct).toBe(61);
+    expect(disk?.available_bytes).toBe(180569808 * 1024);
+  });
+
+  it("excludes tmpfs, zero-block and read-only image mounts", () => {
+    const rows = parseDfOutput(
+      [
+        "Filesystem     1K-blocks    Used Available Use% Mounted on",
+        "/dev/sda1        10000000 4000000   6000000  40% /",
+        "tmpfs              100000    1000     99000   2% /run",
+        "none                    0       0         0 100% /var/lib/docker/x",
+        "/dev/loop0           128000  128000         0 100% /snap/core20/1974",
+      ].join("\n"),
+    );
+    expect(rows.map((r) => r.mount)).toEqual(["/"]);
+  });
+
+  it("carries free space on the series point", () => {
+    const stats = { ...emptyHostStats("h", "H", "local", ""), available: true, disk: parseDfPosix(MACOS_DF) };
+    const point = toSeriesPoint(stats);
+    expect(point.disk_free_bytes).toBe(180569808 * 1024);
+    expect(point.disk_total_bytes).toBe(482797652 * 1024);
+    expect(point.disk_pct).toBe(61);
   });
 });

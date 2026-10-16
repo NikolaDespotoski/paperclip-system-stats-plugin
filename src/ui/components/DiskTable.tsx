@@ -11,7 +11,7 @@ export function DiskTable({ mounts, thresholds, series }: { mounts: DiskMount[];
     { key: "mount", header: "Mount", width: "30%" },
     { key: "total_bytes", header: "Size", render: (v) => bytesToHuman(v as number) },
     { key: "used_bytes", header: "Used", render: (v) => bytesToHuman(v as number) },
-    { key: "available_bytes", header: "Available", render: (v) => bytesToHuman(v as number) },
+    { key: "available_bytes", header: "Free", render: (v) => bytesToHuman(v as number) },
     {
       key: "usage_pct",
       header: "Use",
@@ -25,7 +25,7 @@ export function DiskTable({ mounts, thresholds, series }: { mounts: DiskMount[];
   return (
     <section style={card} aria-label="Disk">
       <h3 style={{ margin: 0, fontSize: 15 }}>Disk</h3>
-      <SeriesChart points={series ?? []} pick={(point) => point.disk_used_bytes} title="Used space (fullest mount)" yLabel="bytes" />
+      <SeriesChart points={series ?? []} pick={(point) => point.disk_free_bytes} title="Free space (fullest mount)" yLabel="bytes" />
       <Table columns={columns} rows={mounts} emptyMessage="No filesystems reported." />
     </section>
   );

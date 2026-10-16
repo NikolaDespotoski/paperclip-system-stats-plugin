@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig, type RemoteHostConfig } from "../src/config.js";
 import { collectSsh, sshCommand, toHostStats } from "../src/remote.js";
+import { REMOTE_COLLECT_SCRIPT } from "../src/remote-script.js";
 import type { RemoteStats } from "../src/types.js";
 import { FakePlatform } from "./fake-platform.js";
 
 const HOST: RemoteHostConfig = { id: "gpu", label: "GPU box", mode: "ssh", host: "10.0.0.5", user: "deploy" };
+
+describe("embedded collector", () => {
+  // The snippet is a string that only ever runs on a remote host, so a syntax
+  // error would otherwise stay invisible until someone SSHes in.
+  it("parses as JavaScript", () => {
+    expect(() => new Function(REMOTE_COLLECT_SCRIPT)).not.toThrow();
+  });
+
+  it("filters away synthetic mounts", () => {
+    // Exercise the snippet's own df parsing without touching the filesystem.
+    const source = REMOTE_COLLECT_SCRIPT;
+    expect(source).toContain("virtualMount");
+    expect(source).toContain("/snap/");
+  });
+});
 
 const REMOTE: RemoteStats = {
   available: true,

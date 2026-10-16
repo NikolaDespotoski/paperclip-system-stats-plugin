@@ -134,6 +134,8 @@ export interface SeriesPoint {
   /** Absolute space taken on the fullest mount (not a percentage). */
   disk_used_bytes: number;
   disk_total_bytes: number;
+  /** Free space on the fullest mount — the number that actually runs out. */
+  disk_free_bytes: number;
   /** used/total for threshold colouring. */
   disk_pct: number;
   net_rx_bps: number;
@@ -163,7 +165,7 @@ export interface SparklinePayload {
 }
 
 /** The mount with the highest usage, i.e. the one closest to filling up. */
-function fullestMount(mounts: DiskMount[]): DiskMount | null {
+export function fullestMount(mounts: DiskMount[]): DiskMount | null {
   let worst: DiskMount | null = null;
   for (const mount of mounts) {
     if (!worst || mount.usage_pct > worst.usage_pct) worst = mount;
@@ -190,6 +192,7 @@ export function toSeriesPoint(stats: HostStats): SeriesPoint {
     mem_pct: stats.mem.usage_pct,
     disk_used_bytes: disk?.used_bytes ?? 0,
     disk_total_bytes: disk?.total_bytes ?? 0,
+    disk_free_bytes: disk?.available_bytes ?? 0,
     disk_pct: disk?.usage_pct ?? 0,
     net_rx_bps: stats.network.total_rx_per_sec,
     net_tx_bps: stats.network.total_tx_per_sec,

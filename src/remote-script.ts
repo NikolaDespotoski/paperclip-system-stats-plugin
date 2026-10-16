@@ -106,18 +106,28 @@ export const REMOTE_COLLECT_SCRIPT = `(async () => {
     return { interfaces: interfaces, total_rx_per_sec: round(totalRx), total_tx_per_sec: round(totalTx) };
   }
 
+  const VIRTUAL = { devfs: 1, none: 1, tmpfs: 1, devtmpfs: 1, shm: 1, ramfs: 1, sysfs: 1, proc: 1, cgroup: 1, cgroup2: 1, autofs: 1, udev: 1, efivarfs: 1, nsfs: 1, tracefs: 1, debugfs: 1, pstore: 1, bpf: 1, securityfs: 1, configfs: 1, fusectl: 1, mqueue: 1, hugetlbfs: 1, binfmt_misc: 1, sunrpc: 1, rpc_pipefs: 1, nfsd: 1 };
+  function virtualMount(source, mount) {
+    if (VIRTUAL[source] === 1) return true;
+    if (source === "map" || source.indexOf("map ") === 0) return true;
+    return mount === "/snap" || mount.indexOf("/snap/") === 0;
+  }
+  function diskRow(source, mount, blocks, used, avail, pcent) {
+    if (!mount || virtualMount(source, mount)) return null;
+    const total = parseInt(blocks, 10), usedB = parseInt(used, 10), availB = parseInt(avail, 10);
+    if (isNaN(total) || isNaN(usedB) || isNaN(availB)) return null;
+    if (total * 1024 <= 0) return null;
+    const pct = parseFloat(pcent.replace("%", ""));
+    return { mount: mount, total_bytes: total * 1024, used_bytes: usedB * 1024, available_bytes: availB * 1024, usage_pct: isFinite(pct) ? pct : round(usedB / total * 100) };
+  }
   function dfModern(text) {
     const rows = [];
     if (text == null) return rows;
     for (const line of text.split("\\n").slice(1)) {
       const t = line.trim().split(/\\s+/);
       if (t.length < 6) continue;
-      const mount = t.slice(5).join(" ");
-      if (!mount || t[0] === "none") continue;
-      const total = parseInt(t[1], 10), used = parseInt(t[2], 10), avail = parseInt(t[3], 10);
-      if ([total, used, avail].some((v) => isNaN(v))) continue;
-      const pct = parseFloat(t[4].replace("%", ""));
-      rows.push({ mount: mount, total_bytes: total * 1024, used_bytes: used * 1024, available_bytes: avail * 1024, usage_pct: isFinite(pct) ? pct : round(used / total * 100) });
+      const r = diskRow(t[0], t.slice(5).join(" "), t[1], t[2], t[3], t[4]);
+      if (r) rows.push(r);
     }
     return rows;
   }
@@ -129,11 +139,9 @@ export const REMOTE_COLLECT_SCRIPT = `(async () => {
       const t = line.trim().split(/\\s+/);
       if (t.length < 6) continue;
       const mount = t.slice(5).join(" ");
-      if (!mount || mount === "on") continue;
-      const total = parseInt(t[1], 10), used = parseInt(t[2], 10), avail = parseInt(t[3], 10);
-      if ([total, used, avail].some((v) => isNaN(v))) continue;
-      const pct = parseFloat(t[4].replace("%", ""));
-      rows.push({ mount: mount, total_bytes: total * 1024, used_bytes: used * 1024, available_bytes: avail * 1024, usage_pct: isFinite(pct) ? pct : round(used / total * 100) });
+      if (mount === "on") continue;
+      const r = diskRow(t[0], mount, t[1], t[2], t[3], t[4]);
+      if (r) rows.push(r);
     }
     return rows;
   }

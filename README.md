@@ -5,13 +5,15 @@ Real-time CPU, RAM, disk, network and Docker monitoring for the Paperclip host a
 | Where | What it shows |
 |---|---|
 | **System** page (`/<company>/system-stats`) | Host tabs, a live indicator, CPU (usage, load, PSI, cores), memory (used/total, swap, buffers), per-mount disk table, per-interface network rates, per-container Docker stats, top processes — plus a **rolling 30-minute chart** for each metric. |
-| Dashboard widget | A compact row per host (CPU/RAM/disk, network throughput) with a sparkline and an absolute reading per metric — `load 1.42`, `17/32 GiB`, `220/500 GiB` — plus a link to the page. |
+| Dashboard widget | A compact row per host (CPU/RAM/disk, network throughput) with a sparkline and an absolute reading per metric — `load 1.42`, `17/32 GiB`, `280 GiB free` — plus a link to the page. |
 
 The page appends new samples every `ui_refresh_seconds` (default 2) and keeps a rolling `history_window_seconds` window (default 1800, i.e. 30 minutes) per host. A **Refresh** button forces a collection immediately.
 
 ## Screenshots
 
-Each metric shows its percentage plus the absolute reading behind it — `17/32 GiB` for RAM, `220/500 GiB` for the fullest disk mount, `load 1.42` for CPU — with ok / warn / crit colouring on both the value and the line. An unreachable host shows dashes instead of a phantom `0%`:
+Each metric shows its percentage plus the absolute reading behind it — `17/32 GiB` for RAM, `280 GiB free` for the fullest disk mount, `load 1.42` for CPU — with ok / warn / crit colouring on both the value and the line. Disk reports **free** space, because that is the number that runs out; the disk chart on the page plots the same free-space series. An unreachable host shows dashes instead of a phantom `0%`:
+
+Synthetic filesystems are excluded from the disk numbers and the per-mount table, since they would otherwise dominate both: macOS reports `devfs` (on `/dev`) and `map` entries as 100% full with `0` free, and Linux reports `tmpfs` and the read-only `/snap` images the same way. What remains is real storage, and the fullest of those is the one charted and shown in the widget.
 
 ![Host health dashboard widget](docs/screenshots/widget-wide.png)
 

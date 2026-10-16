@@ -6,8 +6,8 @@
  */
 import type { ReactElement } from "react";
 import type { Thresholds } from "../../config.js";
-import type { DiskMount, HostSparkline, HostStats } from "../../types.js";
-import { bytesRatio, pct, rate } from "../lib/format.js";
+import { fullestMount, type HostSparkline, type HostStats } from "../../types.js";
+import { bytesRatio, bytesToHuman, pct, rate } from "../lib/format.js";
 import { TONE_COLOR, threshold, type Tone } from "../lib/threshold.js";
 import { Sparkline } from "./Sparkline.js";
 
@@ -36,11 +36,10 @@ export function HostSparklineRow({
   spark: HostSparkline | undefined;
   thresholds: Thresholds;
 }): ReactElement {
-  const fullestMount = host.disk.reduce<DiskMount | null>(
-    (worst, mount) => (worst === null || mount.usage_pct > worst.usage_pct ? mount : worst),
-    null,
-  );
-  const worstDisk = fullestMount?.usage_pct ?? 0;
+  // The fullest mount is the one the percentage and the free-space readout
+  // describe, so both halves of the Disk column agree.
+  const disk = fullestMount(host.disk);
+  const worstDisk = disk?.usage_pct ?? 0;
   const metrics: Metric[] = [
     {
       key: "cpu",
@@ -71,8 +70,9 @@ export function HostSparklineRow({
       series: spark?.disk,
       warn: thresholds.disk_warn,
       crit: thresholds.disk_crit,
-      // Paired with the fullest mount, which is the one the percentage describes.
-      detail: fullestMount ? bytesRatio(fullestMount.used_bytes, fullestMount.total_bytes) : null,
+      // Free space runs out, so it is the number worth showing; the percentage
+      // above it already says how full that same mount is.
+      detail: disk ? `${bytesToHuman(disk.available_bytes)} free` : null,
     },
   ];
 
