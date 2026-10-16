@@ -1,6 +1,6 @@
 {
   "name": "paperclip-plugin-system-stats",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "description": "Paperclip plugin: real-time CPU, RAM, disk, network and Docker monitoring for execution hosts",
   "type": "module",
   "exports": {
