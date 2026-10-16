@@ -65,6 +65,7 @@ paperclipai plugin install github:NikolaDespotoski/paperclip-system-stats-plugin
 Every merge to `main` runs [`.github/workflows/release.yml`](.github/workflows/release.yml): it typechecks, tests and builds, then bumps the version, publishes to npm and tags a GitHub release.
 
 - The default bump is a **patch**; include `#minor` or `#major` in the merge commit message to bump further.
+- The next version is computed from the highest existing `vX.Y.Z` git tag (falling back to `package.json` the first time), so every merge produces a distinct release even though the bumped `package.json` is not committed back to `main`.
 - Add an `NPM_TOKEN` repository secret (an npm access token with publish rights) to enable the npm publish step. Without it, the workflow still tags a GitHub release.
 
 

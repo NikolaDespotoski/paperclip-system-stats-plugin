@@ -1,7 +1,13 @@
 name: Release
 
 # Runs on every merge to main: builds, tests, bumps the version, publishes to
-# npm and cuts a GitHub release + tag. Tag pushes do not re-trigger this.
+# npm and cuts a GitHub release + tag.
+#
+# The next version is derived from the highest existing `vX.Y.Z` tag (falling
+# back to the version in package.json the first time), so every merge produces a
+# distinct release even though the bumped package.json is not committed back.
+# Add #minor or #major to the merge commit message to override the default patch
+# bump. Tag pushes do not re-trigger this workflow.
 on:
   push:
     branches: [main]
@@ -23,6 +29,9 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags: the next version is derived from existing tags.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -41,8 +50,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Determine version bump
-        id: bump
+      - name: Determine next version
+        id: version
         run: |
           MSG="${{ github.event.head_commit.message }}"
           BUMP=patch
@@ -51,10 +60,14 @@ jobs:
           elif grep -qi '#minor' <<<"$MSG"; then
             BUMP=minor
           fi
-          echo "bump=$BUMP" >>"$GITHUB_OUTPUT"
 
-      - name: Bump version
-        run: npm version "${{ steps.bump.outputs.bump }}" --no-git-tag-version
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')
+          BASE=${LATEST_TAG:-$(node -p "require('./package.json').version")}
+          npm version "$BASE" --no-git-tag-version --allow-same-version >/dev/null
+          NEXT=$(npm version "$BUMP" --no-git-tag-version)
+          echo "bump=$BUMP" >>"$GITHUB_OUTPUT"
+          echo "version=${NEXT#v}" >>"$GITHUB_OUTPUT"
+          echo "Bumped $BASE -> ${NEXT#v} ($BUMP)"
 
       - name: Publish to npm
         if: ${{ env.NPM_TOKEN != '' }}
@@ -66,7 +79,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          git tag "v$VERSION" 2>/dev/null || echo "tag v$VERSION already exists"
-          git push origin "v$VERSION" 2>/dev/null || echo "tag v$VERSION already pushed"
-          gh release create "v$VERSION" --generate-notes --title "v$VERSION" || echo "release v$VERSION already exists"
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" --generate-notes --title "v$VERSION" \
+            || echo "release v$VERSION already exists"
