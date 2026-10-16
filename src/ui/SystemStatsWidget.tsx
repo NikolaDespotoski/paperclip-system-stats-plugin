@@ -3,15 +3,15 @@ import { useMemo, type ReactElement } from "react";
 import type { Thresholds } from "../config.js";
 import type { HostSparkline, HostStats, HostsSnapshot, SparklinePayload } from "../types.js";
 import { Sparkline } from "./components/Sparkline.js";
-import { pct, rate, round } from "./lib/format.js";
+import { pct, rate } from "./lib/format.js";
 import { TONE_COLOR, threshold } from "./lib/threshold.js";
 
 const ROUTE = "/system-stats";
-const MAX_HOST_ROWS = 4;
+const MAX_HOST_ROWS = 3;
 
 type WidgetResponse = HostsSnapshot & { thresholds?: Thresholds };
 
-/** One compact row: host label, live percentages, throughput, CPU trace. */
+/** One compact block: host label, live percentages, throughput, CPU line. */
 function HostRow({
   host,
   spark,
@@ -22,31 +22,30 @@ function HostRow({
   thresholds: Thresholds;
 }): ReactElement {
   const worstDisk = Math.max(0, ...host.disk.map((mount) => mount.usage_pct));
-  const cpuTone = threshold(host.cpu.usage_pct, thresholds.cpu_warn, thresholds.cpu_crit);
-  const memTone = threshold(host.mem.usage_pct, thresholds.mem_warn, thresholds.mem_crit);
-  const diskTone = threshold(worstDisk, thresholds.disk_warn, thresholds.disk_crit);
+  const stats: Array<{ label: string; value: string; tone: ReturnType<typeof threshold> }> = [
+    { label: "CPU", value: pct(host.cpu.usage_pct), tone: threshold(host.cpu.usage_pct, thresholds.cpu_warn, thresholds.cpu_crit) },
+    { label: "RAM", value: pct(host.mem.usage_pct), tone: threshold(host.mem.usage_pct, thresholds.mem_warn, thresholds.mem_crit) },
+    { label: "Disk", value: pct(worstDisk), tone: threshold(worstDisk, thresholds.disk_warn, thresholds.disk_crit) },
+  ];
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, opacity: host.available ? 1 : 0.55 }}>
-      <span style={{ minWidth: 84, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {host.label}
-      </span>
-      <span style={{ fontVariantNumeric: "tabular-nums", fontSize: 12 }}>
-        <span style={{ color: TONE_COLOR[cpuTone] }}>CPU {pct(host.cpu.usage_pct)}</span>
-        {"  "}
-        <span style={{ color: TONE_COLOR[memTone] }}>RAM {pct(host.mem.usage_pct)}</span>
-        {"  "}
-        <span style={{ color: TONE_COLOR[diskTone] }}>Disk {pct(worstDisk)}</span>
-      </span>
-      <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
-        {host.available ? `↓${rate(host.network.total_rx_per_sec)} ↑${rate(host.network.total_tx_per_sec)}` : "unreachable"}
-      </span>
+    <div style={{ display: "grid", gap: 2, opacity: host.available ? 1 : 0.55 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12 }}>
+        <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{host.label}</span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>
+          {stats.map((stat) => (
+            <span key={stat.label} style={{ marginRight: 8 }}>
+              {stat.label} <b style={{ color: TONE_COLOR[stat.tone] }}>{stat.value}</b>
+            </span>
+          ))}
+        </span>
+        <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+          {host.available ? `↓${rate(host.network.total_rx_per_sec)} ↑${rate(host.network.total_tx_per_sec)}` : (host.error ?? "unreachable")}
+        </span>
+      </div>
       <Sparkline
         values={spark?.cpu ?? []}
-        width={96}
-        height={24}
-        min={0}
-        max={100}
+        height={26}
         warn={thresholds.cpu_warn}
         crit={thresholds.cpu_crit}
       />
@@ -83,7 +82,7 @@ export function SystemStatsWidget({ context: _context }: PluginWidgetProps): Rea
   );
 
   return (
-    <div style={{ display: "grid", gap: 8 }}>
+    <div style={{ display: "grid", gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <strong>Host health</strong>
         <a {...nav.linkProps(ROUTE)}>Open</a>
@@ -92,7 +91,7 @@ export function SystemStatsWidget({ context: _context }: PluginWidgetProps): Rea
         <HostRow key={host.id} host={host} spark={sparkById.get(host.id)} thresholds={thresholds} />
       ))}
       <span style={{ opacity: 0.7, fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
-        {hosts.length} host{hosts.length === 1 ? "" : "s"} · {round(totals.rx)}/s in · {round(totals.tx)}/s out
+        {hosts.length} host{hosts.length === 1 ? "" : "s"} · {rate(totals.rx)} in · {rate(totals.tx)} out
         {docker > 0 ? ` · ${docker} container${docker === 1 ? "" : "s"}` : ""}
       </span>
     </div>

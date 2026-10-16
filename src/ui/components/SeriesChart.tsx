@@ -31,5 +31,5 @@ export function SeriesChart({
     .filter((entry): entry is { timestamp: string; value: number } => entry.value != null && Number.isFinite(entry.value));
 
   if (data.length === 0) return <div style={EMPTY_STYLE}>Collecting samples…</div>;
-  return <TimeseriesChart data={data} title={title} yLabel={yLabel} height={height} />;
+  return <TimeseriesChart data={data} type="line" title={title} yLabel={yLabel} height={height} />;
 }
