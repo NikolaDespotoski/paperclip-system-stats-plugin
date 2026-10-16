@@ -29,7 +29,9 @@ export interface RemoteHostConfig {
 }
 
 export interface PluginConfig {
-  poll_interval_seconds: number;
+  sample_interval_seconds: number;
+  history_window_seconds: number;
+  ui_refresh_seconds: number;
   include_loopback_interfaces: boolean;
   include_docker_bridge: boolean;
   docker_socket_path: string;
@@ -38,7 +40,9 @@ export interface PluginConfig {
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
-  poll_interval_seconds: 15,
+  sample_interval_seconds: 5,
+  history_window_seconds: 1800,
+  ui_refresh_seconds: 2,
   include_loopback_interfaces: false,
   include_docker_bridge: false,
   docker_socket_path: "/var/run/docker.sock",
@@ -59,7 +63,9 @@ export const DEFAULT_CONFIG: PluginConfig = {
 export const CONFIG_SCHEMA: JsonSchema = {
   type: "object",
   properties: {
-    poll_interval_seconds: { type: "number", default: 15, description: "Seconds between collections. 0 disables the worker's own timer; the manifest cron job then runs it once a minute." },
+    sample_interval_seconds: { type: "number", default: 5, minimum: 2, maximum: 60, description: "Seconds between samples. The worker records one raw point per host each tick. 0 disables the timer (tests/ops)." },
+    history_window_seconds: { type: "number", default: 1800, description: "Retention window for the rolling time series, in seconds." },
+    ui_refresh_seconds: { type: "number", default: 2, minimum: 1, maximum: 30, description: "How often the UI appends new chart points." },
     include_loopback_interfaces: { type: "boolean", default: false },
     include_docker_bridge: { type: "boolean", default: false },
     docker_socket_path: { type: "string", default: "/var/run/docker.sock" },
@@ -157,7 +163,9 @@ export function parseConfig(raw: Record<string, unknown> | null | undefined): Pl
     });
   }
   return {
-    poll_interval_seconds: Math.max(0, number(source.poll_interval_seconds, DEFAULT_CONFIG.poll_interval_seconds)),
+    sample_interval_seconds: Math.max(0, number(source.sample_interval_seconds ?? source.poll_interval_seconds, DEFAULT_CONFIG.sample_interval_seconds)),
+    history_window_seconds: Math.max(60, number(source.history_window_seconds, DEFAULT_CONFIG.history_window_seconds)),
+    ui_refresh_seconds: Math.max(1, number(source.ui_refresh_seconds, DEFAULT_CONFIG.ui_refresh_seconds)),
     include_loopback_interfaces: boolean(source.include_loopback_interfaces, DEFAULT_CONFIG.include_loopback_interfaces),
     include_docker_bridge: boolean(source.include_docker_bridge, DEFAULT_CONFIG.include_docker_bridge),
     docker_socket_path: string(source.docker_socket_path, DEFAULT_CONFIG.docker_socket_path),
@@ -177,9 +185,13 @@ export function validateConfig(raw: Record<string, unknown> | null | undefined):
   const errors: string[] = [];
   const warnings: string[] = [];
   const source = raw ?? {};
-  const interval = number(source.poll_interval_seconds, DEFAULT_CONFIG.poll_interval_seconds);
-  if (interval < 0) errors.push("poll_interval_seconds must be 0 or greater.");
-  if (interval > 0 && interval < 5) warnings.push("poll_interval_seconds below 5s may be too chatty for the host.");
+  const interval = number(source.sample_interval_seconds ?? source.poll_interval_seconds, DEFAULT_CONFIG.sample_interval_seconds);
+  if (interval < 0) errors.push("sample_interval_seconds must be 0 or greater.");
+  if (interval > 0 && interval < 2) warnings.push("sample_interval_seconds below 2s may be too chatty for the host.");
+  const windowSeconds = number(source.history_window_seconds, DEFAULT_CONFIG.history_window_seconds);
+  if (windowSeconds < 60) errors.push("history_window_seconds must be at least 60.");
+  const uiSeconds = number(source.ui_refresh_seconds, DEFAULT_CONFIG.ui_refresh_seconds);
+  if (uiSeconds < 1) errors.push("ui_refresh_seconds must be at least 1.");
   const seen = new Set<string>();
   const hosts = Array.isArray(source.remote_hosts) ? source.remote_hosts : [];
   for (const entry of hosts) {

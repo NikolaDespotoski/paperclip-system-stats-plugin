@@ -1,11 +1,12 @@
 import { KeyValueList } from "@paperclipai/plugin-sdk/ui";
 import type { Thresholds } from "../../config.js";
-import type { HostStats } from "../../types.js";
+import type { HostStats, SeriesPoint } from "../../types.js";
 import { pct, round } from "../lib/format.js";
 import { Stat, card, grid } from "../lib/stat.js";
 import { loadTone, threshold } from "../lib/threshold.js";
+import { SeriesChart } from "./SeriesChart.js";
 
-export function CpuCard({ host, thresholds }: { host: HostStats; thresholds: Thresholds }) {
+export function CpuCard({ host, thresholds, series }: { host: HostStats; thresholds: Thresholds; series?: SeriesPoint[] }) {
   return (
     <section style={card} aria-label="CPU">
       <h3 style={{ margin: 0, fontSize: 15 }}>CPU</h3>
@@ -15,6 +16,7 @@ export function CpuCard({ host, thresholds }: { host: HostStats; thresholds: Thr
         <Stat label="Load 5m" value={round(host.cpu.load5, 2).toFixed(2)} tone={loadTone(host.cpu.load5, host.cpu.cores, thresholds)} />
         <Stat label="Load 15m" value={round(host.cpu.load15, 2).toFixed(2)} tone={loadTone(host.cpu.load15, host.cpu.cores, thresholds)} />
       </div>
+      <SeriesChart points={series ?? []} pick={(point) => point.cpu_pct} title="CPU usage" yLabel="%" />
       <KeyValueList
         pairs={[
           { label: "Cores", value: host.cpu.cores || "—" },

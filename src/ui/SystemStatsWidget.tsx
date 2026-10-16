@@ -1,45 +1,99 @@
-import { MetricCard, Spinner, useHostNavigation, usePluginData, type PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
+import { Spinner, useHostNavigation, usePluginData, type PluginWidgetProps } from "@paperclipai/plugin-sdk/ui";
 import { useMemo, type ReactElement } from "react";
-import type { HostStats, HostsSnapshot } from "../types.js";
-import { pct, rate } from "./lib/format.js";
+import type { Thresholds } from "../config.js";
+import type { HostSparkline, HostStats, HostsSnapshot, SparklinePayload } from "../types.js";
+import { Sparkline } from "./components/Sparkline.js";
+import { pct, rate, round } from "./lib/format.js";
+import { TONE_COLOR, threshold } from "./lib/threshold.js";
 
 const ROUTE = "/system-stats";
+const MAX_HOST_ROWS = 4;
+
+type WidgetResponse = HostsSnapshot & { thresholds?: Thresholds };
+
+/** One compact row: host label, live percentages, throughput, CPU trace. */
+function HostRow({
+  host,
+  spark,
+  thresholds,
+}: {
+  host: HostStats;
+  spark: HostSparkline | undefined;
+  thresholds: Thresholds;
+}): ReactElement {
+  const worstDisk = Math.max(0, ...host.disk.map((mount) => mount.usage_pct));
+  const cpuTone = threshold(host.cpu.usage_pct, thresholds.cpu_warn, thresholds.cpu_crit);
+  const memTone = threshold(host.mem.usage_pct, thresholds.mem_warn, thresholds.mem_crit);
+  const diskTone = threshold(worstDisk, thresholds.disk_warn, thresholds.disk_crit);
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, opacity: host.available ? 1 : 0.55 }}>
+      <span style={{ minWidth: 84, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {host.label}
+      </span>
+      <span style={{ fontVariantNumeric: "tabular-nums", fontSize: 12 }}>
+        <span style={{ color: TONE_COLOR[cpuTone] }}>CPU {pct(host.cpu.usage_pct)}</span>
+        {"  "}
+        <span style={{ color: TONE_COLOR[memTone] }}>RAM {pct(host.mem.usage_pct)}</span>
+        {"  "}
+        <span style={{ color: TONE_COLOR[diskTone] }}>Disk {pct(worstDisk)}</span>
+      </span>
+      <span style={{ marginLeft: "auto", opacity: 0.6, fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+        {host.available ? `↓${rate(host.network.total_rx_per_sec)} ↑${rate(host.network.total_tx_per_sec)}` : "unreachable"}
+      </span>
+      <Sparkline
+        values={spark?.cpu ?? []}
+        width={96}
+        height={24}
+        min={0}
+        max={100}
+        warn={thresholds.cpu_warn}
+        crit={thresholds.cpu_crit}
+      />
+    </div>
+  );
+}
 
 export function SystemStatsWidget({ context: _context }: PluginWidgetProps): ReactElement {
   const nav = useHostNavigation();
-  const { data, loading, error } = usePluginData<HostsSnapshot>("host-stats", {});
+  const { data, loading, error } = usePluginData<WidgetResponse>("host-stats", {});
+  const { data: sparks } = usePluginData<SparklinePayload>("host-sparklines", {});
 
-  const summary = useMemo(() => {
-    const hosts = (data?.hosts ?? []).filter((h) => h.available);
-    if (!hosts.length) return null;
-    const avg = (pick: (h: HostStats) => number) => hosts.reduce((sum, h) => sum + pick(h), 0) / hosts.length;
-    const worstDisk = Math.max(0, ...hosts.flatMap((h) => h.disk.map((d) => d.usage_pct)));
-    const netRx = hosts.reduce((sum, h) => sum + h.network.total_rx_per_sec, 0);
-    const netTx = hosts.reduce((sum, h) => sum + h.network.total_tx_per_sec, 0);
-    const docker = hosts.reduce((sum, h) => sum + (h.docker?.running_count ?? 0), 0);
-    return { cpu: avg((h) => h.cpu.usage_pct), mem: avg((h) => h.mem.usage_pct), worstDisk, netRx, netTx, docker, hosts: hosts.length };
-  }, [data]);
+  const sparkById = useMemo(() => {
+    const map = new Map<string, HostSparkline>();
+    for (const host of sparks?.hosts ?? []) map.set(host.id, host);
+    return map;
+  }, [sparks]);
+
+  const hosts = useMemo(() => data?.hosts ?? [], [data]);
+  const thresholds = data?.thresholds;
 
   if (loading && !data) return <Spinner label="Loading host health" />;
   if (error) return <div>Error: {error.message}</div>;
-  if (!summary) return <div>No host stats yet.</div>;
+  if (!hosts.length || !thresholds) return <div>No host stats yet.</div>;
+
+  const docker = hosts.reduce((sum, host) => sum + (host.docker?.running_count ?? 0), 0);
+  const totals = hosts.reduce(
+    (acc, host) => {
+      acc.rx += host.network.total_rx_per_sec;
+      acc.tx += host.network.total_tx_per_sec;
+      return acc;
+    },
+    { rx: 0, tx: 0 },
+  );
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <strong>Host health</strong>
         <a {...nav.linkProps(ROUTE)}>Open</a>
       </div>
-      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))" }}>
-        <MetricCard label="CPU avg" value={pct(summary.cpu)} />
-        <MetricCard label="RAM avg" value={pct(summary.mem)} />
-        <MetricCard label="Worst disk" value={pct(summary.worstDisk)} />
-        <MetricCard label="Net RX" value={rate(summary.netRx)} />
-        <MetricCard label="Net TX" value={rate(summary.netTx)} />
-        <MetricCard label="Docker" value={summary.docker} />
-      </div>
-      <span style={{ opacity: 0.7, fontSize: 12 }}>
-        {summary.hosts} host{summary.hosts === 1 ? "" : "s"}
+      {hosts.slice(0, MAX_HOST_ROWS).map((host) => (
+        <HostRow key={host.id} host={host} spark={sparkById.get(host.id)} thresholds={thresholds} />
+      ))}
+      <span style={{ opacity: 0.7, fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+        {hosts.length} host{hosts.length === 1 ? "" : "s"} · {round(totals.rx)}/s in · {round(totals.tx)}/s out
+        {docker > 0 ? ` · ${docker} container${docker === 1 ? "" : "s"}` : ""}
       </span>
     </div>
   );

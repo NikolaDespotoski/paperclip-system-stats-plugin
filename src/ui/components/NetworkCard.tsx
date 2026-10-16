@@ -1,11 +1,12 @@
 import type { Thresholds } from "../../config.js";
-import type { NetworkInterface } from "../../types.js";
+import type { NetworkInterface, SeriesPoint } from "../../types.js";
 import { rate, round } from "../lib/format.js";
 import { card } from "../lib/stat.js";
 import { TONE_COLOR, threshold } from "../lib/threshold.js";
 import { Table, type DataTableColumn } from "../lib/table.js";
+import { SeriesChart } from "./SeriesChart.js";
 
-export function NetworkCard({ network, thresholds }: { network: { interfaces: NetworkInterface[] }; thresholds: Thresholds }) {
+export function NetworkCard({ network, thresholds, series }: { network: { interfaces: NetworkInterface[] }; thresholds: Thresholds; series?: SeriesPoint[] }) {
   const columns: DataTableColumn<NetworkInterface>[] = [
     { key: "name", header: "Interface", width: "16%" },
     {
@@ -38,6 +39,8 @@ export function NetworkCard({ network, thresholds }: { network: { interfaces: Ne
   return (
     <section style={card} aria-label="Network">
       <h3 style={{ margin: 0, fontSize: 15 }}>Network</h3>
+      <SeriesChart points={series ?? []} pick={(point) => point.net_rx_bps} title="Receive" yLabel="bytes/s" />
+      <SeriesChart points={series ?? []} pick={(point) => point.net_tx_bps} title="Transmit" yLabel="bytes/s" />
       <Table columns={columns} rows={network.interfaces} emptyMessage="No network interfaces reported." />
     </section>
   );

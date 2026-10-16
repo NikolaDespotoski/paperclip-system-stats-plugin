@@ -1,19 +1,40 @@
 /**
- * Worker entrypoint. Registers the UI data/action handlers, the collection job
- * and the webhook handler, then starts the polling timer. Every collection goes
- * through `collectAllHosts`; the newest snapshot lives in instance-scoped plugin
- * state so any open view can read it.
+ * Worker entrypoint.
+ *
+ * Every `sample_interval_seconds` the worker collects the local host plus every
+ * SSH host, appends one raw `SeriesPoint` per available host to an in-memory
+ * ring buffer, and persists the windowed buffer to instance-scoped plugin state
+ * so a restart does not blank the graphs. The UI reads the newest snapshot plus
+ * the rolling series, and appends deltas with the `series-since` action.
+ *
+ * The timer lives here rather than in a manifest job because cron granularity
+ * is one minute, which cannot deliver the near-realtime charts the plan asks
+ * for. The manifest job is the once-a-minute retention sweep.
  */
 import { definePlugin, runWorker, type PluginContext, type PluginWebhookInput } from "@paperclipai/plugin-sdk";
 import { parseConfig, validateConfig, type PluginConfig } from "./config.js";
 import { JOB_KEY, WEBHOOK_ENDPOINT } from "./manifest.js";
 import { collectAllHosts, toHostStats } from "./remote.js";
+import { RingBuffer } from "./series.js";
 import { readRemoteStats, readSnapshot, storeRemoteStats, storeSnapshot } from "./state.js";
-import type { HostStats, HostsSnapshot, RemoteStats } from "./types.js";
+import {
+  downsample,
+  toSeriesPoint,
+  type HostSeries,
+  type HostStats,
+  type HostsSnapshot,
+  type RemoteStats,
+  type SeriesPoint,
+  type SparklinePayload,
+} from "./types.js";
+
+/** Max points shipped to the dashboard-widget sparklines (full res on the page). */
+const SPARKLINE_MAX = 180;
 
 let workerCtx: PluginContext | null = null;
 let timer: NodeJS.Timeout | null = null;
-let collecting = false;
+let sampling = false;
+const buffers = new RingBuffer();
 
 function requireCtx(): PluginContext {
   if (!workerCtx) throw new Error("worker context is not initialised");
@@ -28,37 +49,73 @@ async function loadConfig(ctx: PluginContext): Promise<PluginConfig> {
   }
 }
 
-function stopPolling(): void {
+/** Every host this plugin tracks: the local box plus configured remotes. */
+function knownHostIds(config: PluginConfig): string[] {
+  return ["localhost", ...config.remote_hosts.map((host) => host.id)];
+}
+
+function windowMs(config: PluginConfig): number {
+  return config.history_window_seconds * 1000;
+}
+
+function stopSampling(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
   }
 }
 
-function startPolling(ctx: PluginContext, config: PluginConfig): void {
-  stopPolling();
-  if (config.poll_interval_seconds <= 0) return;
+function startSampling(ctx: PluginContext, config: PluginConfig): void {
+  stopSampling();
+  if (config.sample_interval_seconds <= 0) return;
   timer = setInterval(() => {
-    void runCollection("interval").catch((error: unknown) => {
-      ctx.logger.warn("interval collection failed", { error: String(error) });
+    void sample("interval").catch((error: unknown) => {
+      ctx.logger.warn("interval sampling failed", { error: String(error) });
     });
-  }, config.poll_interval_seconds * 1000);
+  }, config.sample_interval_seconds * 1000);
   timer.unref?.();
 }
 
-async function runCollection(trigger: string): Promise<{ collected_at: string; hosts: number; skipped?: boolean }> {
-  if (collecting) return { collected_at: "", hosts: 0, skipped: true };
-  collecting = true;
+/**
+ * Collect every host once, store the newest full snapshot (for the tables) and
+ * append a raw series point per available host. Unreachable hosts are skipped
+ * so a failure does not punch a bogus zero into the chart.
+ */
+async function sample(trigger: string): Promise<{ collected_at: string; hosts: number; skipped?: boolean }> {
+  if (sampling) return { collected_at: "", hosts: 0, skipped: true };
+  sampling = true;
   try {
     const ctx = requireCtx();
     const config = await loadConfig(ctx);
+    const window = windowMs(config);
     const snapshot = await collectAllHosts(config, ctx.logger);
     await storeSnapshot(ctx, snapshot);
-    ctx.logger.debug("collected host stats", { trigger, hosts: snapshot.hosts.length });
+    const now = Date.now();
+    for (const host of snapshot.hosts) {
+      if (!host.available) continue;
+      buffers.push(host.id, toSeriesPoint(host), window, now);
+      await buffers.persist(ctx, host.id);
+    }
+    ctx.logger.debug("sampled host stats", { trigger, hosts: snapshot.hosts.length });
     return { collected_at: snapshot.collected_at, hosts: snapshot.hosts.length };
   } finally {
-    collecting = false;
+    sampling = false;
   }
+}
+
+/** Merge the newest SSH/local snapshot with freshly pushed webhook hosts. */
+async function currentHosts(ctx: PluginContext, config: PluginConfig): Promise<{ hosts: HostStats[]; collected_at: string }> {
+  const snapshot = await readSnapshot(ctx);
+  const hosts: HostStats[] = [...(snapshot?.hosts ?? [])];
+  const maxAgeMs = Math.max(60_000, config.sample_interval_seconds * 1000 * 4);
+  for (const host of config.remote_hosts) {
+    if (host.mode !== "webhook") continue;
+    const pushed = await readRemoteStats(ctx, host.id);
+    if (!pushed) continue;
+    const ageMs = Date.now() - Date.parse(pushed.collected_at);
+    hosts.push(ageMs > maxAgeMs ? { ...pushed, available: false, error: "stale — no recent push" } : pushed);
+  }
+  return { hosts, collected_at: snapshot?.collected_at ?? new Date().toISOString() };
 }
 
 function headerValue(headers: Record<string, string | string[]>, name: string): string {
@@ -78,61 +135,98 @@ function timingSafeEqual(a: string, b: string): boolean {
 const plugin = definePlugin({
   async setup(ctx) {
     workerCtx = ctx;
-
-    // UI data feed: local + SSH hosts from the snapshot, plus fresh webhook
-    // pushes merged in from their own per-host state keys.
-    ctx.data.register("host-stats", async () => {
-      const config = await loadConfig(ctx);
-      const snapshot = await readSnapshot(ctx);
-      const hosts: HostStats[] = [...(snapshot?.hosts ?? [])];
-      const maxAgeMs = Math.max(60_000, config.poll_interval_seconds * 1000 * 4);
-      for (const host of config.remote_hosts) {
-        if (host.mode !== "webhook") continue;
-        const pushed = await readRemoteStats(ctx, host.id);
-        if (!pushed) continue;
-        const ageMs = Date.now() - Date.parse(pushed.collected_at);
-        hosts.push(ageMs > maxAgeMs ? { ...pushed, available: false, error: "stale — no recent push" } : pushed);
-      }
-      const result: HostsSnapshot & { thresholds: PluginConfig["thresholds"] } = {
-        hosts,
-        collected_at: snapshot?.collected_at ?? new Date().toISOString(),
-        thresholds: config.thresholds,
-      };
-      return result;
-    });
-
-    // UI action: force a refresh now.
-    ctx.actions.register("refresh", async () => {
-      const result = await runCollection("manual");
-      return { ok: true, ...result };
-    });
-
-    // Scheduled collection (manifest cron, manual runs and retries).
-    ctx.jobs.register(JOB_KEY, async () => {
-      await runCollection("schedule");
-    });
-
     const config = await loadConfig(ctx);
-    startPolling(ctx, config);
+    // Fresh bootstrap: drop any in-process history, then re-hydrate what was persisted.
+    buffers.clear();
+    await buffers.hydrate(ctx, knownHostIds(config), windowMs(config), Date.now());
+
+    // --- Latest snapshot (headline numbers + detailed tables) ---
+    ctx.data.register("host-stats", async () => {
+      const cfg = await loadConfig(ctx);
+      const { hosts, collected_at } = await currentHosts(ctx, cfg);
+      return {
+        hosts,
+        collected_at,
+        thresholds: cfg.thresholds,
+        sample_interval_seconds: cfg.sample_interval_seconds,
+        history_window_seconds: cfg.history_window_seconds,
+        ui_refresh_seconds: cfg.ui_refresh_seconds,
+      };
+    });
+
+    // --- Full rolling window for one host (initial chart load) ---
+    ctx.data.register("host-series", async (params): Promise<HostSeries> => {
+      const cfg = await loadConfig(ctx);
+      const { hostId, windowMs: requested } = (params ?? {}) as { hostId?: string; windowMs?: number };
+      const window = requested ?? windowMs(cfg);
+      return { hostId: hostId ?? "", windowMs: window, points: buffers.window(hostId ?? "", window, Date.now()) };
+    });
+
+    // --- Downsampled arrays for the dashboard-widget sparklines ---
+    ctx.data.register("host-sparklines", async (): Promise<SparklinePayload> => {
+      const cfg = await loadConfig(ctx);
+      const now = Date.now();
+      const window = windowMs(cfg);
+      const hosts = knownHostIds(cfg)
+        .map((id) => {
+          const points = downsample(buffers.window(id, window, now), SPARKLINE_MAX);
+          return {
+            id,
+            cpu: points.map((p) => p.cpu_pct),
+            mem: points.map((p) => p.mem_pct),
+            disk: points.map((p) => p.disk_pct),
+          };
+        })
+        .filter((host) => host.cpu.length > 0);
+      return { hosts };
+    });
+
+    // --- Incremental delta (realtime chart append) ---
+    ctx.actions.register("series-since", async (params): Promise<{ hostId: string; points: SeriesPoint[] }> => {
+      const cfg = await loadConfig(ctx);
+      const { hostId, sinceTs } = (params ?? {}) as { hostId?: string; sinceTs?: number };
+      if (!hostId) return { hostId: "", points: [] };
+      return { hostId, points: buffers.since(hostId, sinceTs ?? 0, windowMs(cfg), Date.now()) };
+    });
+
+    // --- Force an immediate sample ---
+    ctx.actions.register("refresh", async () => ({ ok: true, ...(await sample("manual")) }));
+
+    // --- Retention: trim every buffer to the window and persist it. ---
+    ctx.jobs.register(JOB_KEY, async () => {
+      const cfg = await loadConfig(ctx);
+      const window = windowMs(cfg);
+      const now = Date.now();
+      for (const id of buffers.hostIds()) buffers.trim(id, window, now);
+      await buffers.persistAll(ctx);
+    });
+
+    startSampling(ctx, config);
   },
 
   async onHealth() {
-    const snapshot = workerCtx ? await readSnapshot(workerCtx) : null;
+    if (!workerCtx) return { status: "ok", message: "not initialised" };
+    const snapshot = await readSnapshot(workerCtx);
+    const hosts = buffers.hostIds().length;
     return {
       status: "ok",
-      message: snapshot ? `tracking ${snapshot.hosts.length} host(s)` : "no snapshot yet",
+      message: snapshot ? `tracking ${snapshot.hosts.length} host(s), ${hosts} series` : "no snapshot yet",
     };
   },
 
   async onShutdown() {
-    stopPolling();
+    stopSampling();
     workerCtx = null;
   },
 
   async onConfigChanged(newConfig: Record<string, unknown>) {
     const ctx = workerCtx;
     if (!ctx) return;
-    startPolling(ctx, parseConfig(newConfig));
+    const config = parseConfig(newConfig);
+    const window = windowMs(config);
+    const now = Date.now();
+    for (const id of buffers.hostIds()) buffers.trim(id, window, now);
+    startSampling(ctx, config);
   },
 
   async onValidateConfig(config: Record<string, unknown>) {
@@ -158,6 +252,11 @@ const plugin = definePlugin({
     if (!timingSafeEqual(headerValue(input.headers, "x-paperclip-secret"), expected)) return;
     const stats = toHostStats(host.id, host.label, "webhook", body.stats as RemoteStats);
     await storeRemoteStats(ctx, host.id, stats);
+    // Pushed hosts get the same 30-minute graphs as locally sampled ones.
+    if (stats.available) {
+      buffers.push(host.id, toSeriesPoint(stats), windowMs(config), Date.now());
+      await buffers.persist(ctx, host.id);
+    }
   },
 });
 

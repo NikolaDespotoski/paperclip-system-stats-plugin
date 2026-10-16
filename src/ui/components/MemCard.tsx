@@ -1,11 +1,12 @@
 import { KeyValueList } from "@paperclipai/plugin-sdk/ui";
 import type { Thresholds } from "../../config.js";
-import type { HostStats } from "../../types.js";
+import type { HostStats, SeriesPoint } from "../../types.js";
 import { bytesToHuman, pct } from "../lib/format.js";
 import { Stat, card, grid } from "../lib/stat.js";
 import { threshold } from "../lib/threshold.js";
+import { SeriesChart } from "./SeriesChart.js";
 
-export function MemCard({ host, thresholds }: { host: HostStats; thresholds: Thresholds }) {
+export function MemCard({ host, thresholds, series }: { host: HostStats; thresholds: Thresholds; series?: SeriesPoint[] }) {
   const mem = host.mem;
   const usedPct = mem.usage_pct;
   const swapPct = mem.swap_total_bytes > 0 ? (mem.swap_used_bytes / mem.swap_total_bytes) * 100 : 0;
@@ -27,6 +28,7 @@ export function MemCard({ host, thresholds }: { host: HostStats; thresholds: Thr
       >
         <div style={{ width: `${Math.min(100, Math.max(0, usedPct))}%`, height: "100%", background: "#3b82f6" }} />
       </div>
+      <SeriesChart points={series ?? []} pick={(point) => point.mem_pct} title="Memory usage" yLabel="%" />
       <KeyValueList
         pairs={[
           { label: "Buffers", value: bytesToHuman(mem.buffers_bytes) },

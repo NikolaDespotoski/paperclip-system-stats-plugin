@@ -1,12 +1,13 @@
 import { KeyValueList } from "@paperclipai/plugin-sdk/ui";
 import type { Thresholds } from "../../config.js";
-import type { DockerContainer, DockerStats } from "../../types.js";
+import type { DockerContainer, DockerStats, SeriesPoint } from "../../types.js";
 import { bytesToHuman } from "../lib/format.js";
 import { card } from "../lib/stat.js";
 import { TONE_COLOR, threshold } from "../lib/threshold.js";
 import { Table, type DataTableColumn } from "../lib/table.js";
+import { SeriesChart } from "./SeriesChart.js";
 
-export function DockerCard({ docker, thresholds }: { docker: DockerStats | null; thresholds: Thresholds }) {
+export function DockerCard({ docker, thresholds, series }: { docker: DockerStats | null; thresholds: Thresholds; series?: SeriesPoint[] }) {
   if (!docker) {
     return (
       <section style={card} aria-label="Docker">
@@ -42,6 +43,8 @@ export function DockerCard({ docker, thresholds }: { docker: DockerStats | null;
   return (
     <section style={card} aria-label="Docker">
       <h3 style={{ margin: 0, fontSize: 15 }}>Docker</h3>
+      <SeriesChart points={series ?? []} pick={(point) => point.docker_cpu_pct} title="Container CPU" yLabel="%" />
+      <SeriesChart points={series ?? []} pick={(point) => point.docker_mem_bytes} title="Container memory" yLabel="bytes" />
       <Table columns={columns} rows={docker.containers} emptyMessage="No running containers." />
       {docker.disk && (
         <KeyValueList

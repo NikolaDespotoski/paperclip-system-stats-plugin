@@ -4,10 +4,10 @@ Real-time CPU, RAM, disk, network and Docker monitoring for the Paperclip host a
 
 | Where | What it shows |
 |---|---|
-| **System** page (`/<company>/system-stats`) | Host tabs, a live indicator, CPU (usage, load, PSI, cores), memory (used/total, swap, buffers), per-mount disk table, per-interface network rates, per-container Docker stats, and top processes. |
-| Dashboard widget | Compact averages: CPU, RAM, worst disk, network totals and Docker container count, plus a link to the page. |
+| **System** page (`/<company>/system-stats`) | Host tabs, a live indicator, CPU (usage, load, PSI, cores), memory (used/total, swap, buffers), per-mount disk table, per-interface network rates, per-container Docker stats, top processes — plus a **rolling 30-minute chart** for each metric. |
+| Dashboard widget | A compact row per host (CPU/RAM/disk percentages, network throughput) with a tiny CPU sparkline, plus a link to the page. |
 
-The page polls every 15 seconds and has a **Refresh** button that forces a collection immediately.
+The page appends new samples every `ui_refresh_seconds` (default 2) and keeps a rolling `history_window_seconds` window (default 1800, i.e. 30 minutes) per host. A **Refresh** button forces a collection immediately.
 
 ## Data gathered
 
@@ -57,7 +57,7 @@ paperclipai plugin install github:NikolaDespotoski/paperclip-system-stats-plugin
 ### After installing
 
 1. Go to **Settings → Plugins → System Stats** and enable it.
-2. Adjust `poll_interval_seconds`, `remote_hosts` and `thresholds` (see [Configuration](#configuration)).
+2. Adjust `sample_interval_seconds`, `history_window_seconds`, `ui_refresh_seconds`, `remote_hosts` and `thresholds` (see [Configuration](#configuration)).
 3. Open the **System** page in the sidebar, or find the **Host Health** widget on the dashboard.
 
 ## Configuration
@@ -66,12 +66,34 @@ Configured in **Settings → Plugins → System Stats**. The schema is also in [
 
 | Key | Default | Meaning |
 |---|---|---|
-| `poll_interval_seconds` | `15` | Worker polling cadence. `0` disables the worker timer; the manifest cron job then runs once a minute. |
+| `sample_interval_seconds` | `5` | How often the worker records one raw sample per host. Minimum 2; `0` disables the sampling timer (the retention job still runs, and `Refresh` still collects on demand). |
+| `history_window_seconds` | `1800` | Retention window for the rolling series, in seconds (minimum 60). |
+| `ui_refresh_seconds` | `2` | How often the open page fetches the newest snapshot and appends new chart points. |
 | `include_loopback_interfaces` | `false` | Include `lo` in the network card. |
 | `include_docker_bridge` | `false` | Include `docker0` / `br-*` / `veth*` interfaces. |
 | `docker_socket_path` | `/var/run/docker.sock` | Docker socket for `docker -H`. |
 | `remote_hosts` | `[]` | SSH or webhook hosts (below). |
 | `thresholds` | see below | Colour cut-offs. |
+
+### Rolling time series
+
+Each sample is appended to an in-memory ring buffer per host and trimmed to
+`history_window_seconds`. Every stored point is the **raw instantaneous
+reading** — nothing is averaged, smoothed or rolled up, so a spike is visible at
+its true magnitude.
+
+History is persisted to instance-scoped plugin state (`ctx.state`, namespace
+`series`, one key per host) and re-hydrated at startup, so a worker restart or
+reload does not blank the graphs. The plugin deliberately does **not** use a
+plugin-owned database namespace: the `database.namespace.*` capabilities are
+company-scoped, while this plugin's sampler is instance-wide with no active
+company invocation, so `ctx.db` is not reachable from the sampling loop. If you
+lose `ctx.state`, the worst case is a cold-start graph — never a crash.
+
+The `prune-samples` manifest job runs once a minute to trim each buffer to the
+window and re-persist it. The sampling loop itself is a `setInterval` in the
+worker (cron granularity of one minute is too coarse for a 30-minute live
+graph).
 
 ### Remote hosts
 
@@ -132,6 +154,7 @@ The webhook secret is compared in constant time; pushes with a missing or wrong 
 - **No PSI** — the PSI row shows "not available".
 - **No network permissions** — the network card shows an error state.
 - **SSH failure** — the remote card shows "unreachable" with the reason.
+- **No history yet** — charts show "Collecting samples…" until the first point lands; an unavailable host keeps its last-known series and is never charted as a zero.
 
 ## Development
 
