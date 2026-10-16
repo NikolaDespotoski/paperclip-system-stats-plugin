@@ -23,6 +23,27 @@ export function rate(bytesPerSec: number | null | undefined): string {
   return `${bytesToHuman(bytesPerSec)}/s`;
 }
 
+/**
+ * "240/500 GB" — a used/total pair sharing one unit, so the two numbers stay
+ * comparable at a glance instead of reading "240 GB / 488 GiB".
+ *
+ * The unit comes from the total (the larger number) and the precision adapts to
+ * it, which keeps a 500 GB disk at "240/500 GB" and a 9.5 GB one at
+ * "8.2/9.5 GB". Returns `null` when there is nothing to divide by, so callers
+ * can omit the line entirely rather than print "0 B".
+ */
+export function bytesRatio(used: number | null | undefined, total: number | null | undefined): string | null {
+  if (used == null || total == null || !Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return null;
+  let divisor = 1;
+  let unit = 0;
+  while (total / divisor >= 1024 && unit < UNITS.length - 1) {
+    divisor *= 1024;
+    unit += 1;
+  }
+  const digits = total / divisor < 10 ? 1 : 0;
+  return `${round(used / divisor, digits)}/${round(total / divisor, digits)} ${UNITS[unit]}`;
+}
+
 export function pct(value: number | null | undefined, digits = 0): string {
   if (value == null || !Number.isFinite(value)) return "—";
   return `${round(value, digits)}%`;

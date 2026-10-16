@@ -6,8 +6,8 @@
  */
 import type { ReactElement } from "react";
 import type { Thresholds } from "../../config.js";
-import type { HostSparkline, HostStats } from "../../types.js";
-import { pct, rate } from "../lib/format.js";
+import type { DiskMount, HostSparkline, HostStats } from "../../types.js";
+import { bytesRatio, pct, rate } from "../lib/format.js";
 import { TONE_COLOR, threshold, type Tone } from "../lib/threshold.js";
 import { Sparkline } from "./Sparkline.js";
 
@@ -19,6 +19,12 @@ interface Metric {
   series: number[] | undefined;
   warn: number;
   crit: number;
+  /**
+   * The absolute reading behind the percentage ("240/500 GB"), or `null`/absent
+   * when the metric has no meaningful pair. Every column renders the same
+   * number of rows so the sparklines stay aligned across a row.
+   */
+  detail?: string | null;
 }
 
 export function HostSparklineRow({
@@ -30,7 +36,11 @@ export function HostSparklineRow({
   spark: HostSparkline | undefined;
   thresholds: Thresholds;
 }): ReactElement {
-  const worstDisk = Math.max(0, ...host.disk.map((mount) => mount.usage_pct));
+  const fullestMount = host.disk.reduce<DiskMount | null>(
+    (worst, mount) => (worst === null || mount.usage_pct > worst.usage_pct ? mount : worst),
+    null,
+  );
+  const worstDisk = fullestMount?.usage_pct ?? 0;
   const metrics: Metric[] = [
     {
       key: "cpu",
@@ -40,6 +50,8 @@ export function HostSparklineRow({
       series: spark?.cpu,
       warn: thresholds.cpu_warn,
       crit: thresholds.cpu_crit,
+      // A percentage is the whole story for CPU; load is its absolute companion.
+      detail: `load ${host.cpu.load1.toFixed(2)}`,
     },
     {
       key: "mem",
@@ -49,6 +61,7 @@ export function HostSparklineRow({
       series: spark?.mem,
       warn: thresholds.mem_warn,
       crit: thresholds.mem_crit,
+      detail: bytesRatio(host.mem.used_bytes, host.mem.total_bytes),
     },
     {
       key: "disk",
@@ -58,6 +71,8 @@ export function HostSparklineRow({
       series: spark?.disk,
       warn: thresholds.disk_warn,
       crit: thresholds.disk_crit,
+      // Paired with the fullest mount, which is the one the percentage describes.
+      detail: fullestMount ? bytesRatio(fullestMount.used_bytes, fullestMount.total_bytes) : null,
     },
   ];
 
@@ -83,6 +98,21 @@ export function HostSparklineRow({
                 <b style={{ opacity: 0.5 }}>—</b>
               )}
             </span>
+            {host.available && metric.detail && (
+              <span
+                title={metric.detail}
+                style={{
+                  fontSize: 10,
+                  opacity: 0.65,
+                  fontVariantNumeric: "tabular-nums",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {metric.detail}
+              </span>
+            )}
             {host.available && <Sparkline values={metric.series ?? []} height={24} warn={metric.warn} crit={metric.crit} />}
           </div>
         ))}

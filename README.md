@@ -5,13 +5,13 @@ Real-time CPU, RAM, disk, network and Docker monitoring for the Paperclip host a
 | Where | What it shows |
 |---|---|
 | **System** page (`/<company>/system-stats`) | Host tabs, a live indicator, CPU (usage, load, PSI, cores), memory (used/total, swap, buffers), per-mount disk table, per-interface network rates, per-container Docker stats, top processes — plus a **rolling 30-minute chart** for each metric. |
-| Dashboard widget | A compact row per host (CPU/RAM/disk percentages, network throughput) with a tiny CPU sparkline, plus a link to the page. |
+| Dashboard widget | A compact row per host (CPU/RAM/disk, network throughput) with a sparkline and an absolute reading per metric — `load 1.42`, `17/32 GiB`, `220/500 GiB` — plus a link to the page. |
 
 The page appends new samples every `ui_refresh_seconds` (default 2) and keeps a rolling `history_window_seconds` window (default 1800, i.e. 30 minutes) per host. A **Refresh** button forces a collection immediately.
 
 ## Screenshots
 
-The dashboard widget draws one line per headline metric — CPU, RAM and disk — for every host, with ok / warn / crit colouring on both the value and the line. An unreachable host shows dashes instead of a phantom `0%`:
+Each metric shows its percentage plus the absolute reading behind it — `17/32 GiB` for RAM, `220/500 GiB` for the fullest disk mount, `load 1.42` for CPU — with ok / warn / crit colouring on both the value and the line. An unreachable host shows dashes instead of a phantom `0%`:
 
 ![Host health dashboard widget](docs/screenshots/widget-wide.png)
 
