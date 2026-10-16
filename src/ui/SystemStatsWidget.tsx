@@ -4,22 +4,36 @@ import type { Thresholds } from "../config.js";
 import type { HostSparkline, HostsSnapshot, SparklinePayload } from "../types.js";
 import { HostSparklineRow } from "./components/HostSparklineRow.js";
 import { rate } from "./lib/format.js";
+import { usePolling } from "./lib/usePolling.js";
 
 const ROUTE = "/system-stats";
 const MAX_HOST_ROWS = 3;
+const DEFAULT_REFRESH_SECONDS = 2;
 
-type WidgetResponse = HostsSnapshot & { thresholds?: Thresholds };
+/** Stable params object: a fresh `{}` each render could re-trigger the fetch. */
+const NO_PARAMS: Record<string, never> = {};
+
+type WidgetResponse = HostsSnapshot & { thresholds?: Thresholds; ui_refresh_seconds?: number };
 
 export function SystemStatsWidget({ context: _context }: PluginWidgetProps): ReactElement {
   const nav = useHostNavigation();
-  const { data, loading, error } = usePluginData<WidgetResponse>("host-stats", {});
-  const { data: sparks } = usePluginData<SparklinePayload>("host-sparklines", {});
+  const stats = usePluginData<WidgetResponse>("host-stats", NO_PARAMS);
+  const sparks = usePluginData<SparklinePayload>("host-sparklines", NO_PARAMS);
+
+  const { data, loading, error } = stats;
+  const refreshSeconds = data?.ui_refresh_seconds ?? DEFAULT_REFRESH_SECONDS;
+
+  // Without this the widget fetches once and freezes at first paint.
+  usePolling(() => {
+    stats.refresh();
+    sparks.refresh();
+  }, refreshSeconds);
 
   const sparkById = useMemo(() => {
     const map = new Map<string, HostSparkline>();
-    for (const host of sparks?.hosts ?? []) map.set(host.id, host);
+    for (const host of sparks.data?.hosts ?? []) map.set(host.id, host);
     return map;
-  }, [sparks]);
+  }, [sparks.data]);
 
   const hosts = useMemo(() => data?.hosts ?? [], [data]);
   const thresholds = data?.thresholds;

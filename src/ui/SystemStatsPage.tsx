@@ -1,5 +1,5 @@
 import { KeyValueList, Spinner, usePluginAction, usePluginData, type PluginPageProps } from "@paperclipai/plugin-sdk/ui";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Thresholds } from "../config.js";
 import type { HostsSnapshot } from "../types.js";
 import { CpuCard } from "./components/CpuCard.js";
@@ -10,35 +10,34 @@ import { LiveIndicator } from "./components/LiveIndicator.js";
 import { MemCard } from "./components/MemCard.js";
 import { NetworkCard } from "./components/NetworkCard.js";
 import { TopProcsTable } from "./components/TopProcsTable.js";
-import { uptime } from "./lib/format.js";
+import { age, uptime } from "./lib/format.js";
 import { useLiveSeries } from "./lib/useLiveSeries.js";
+import { usePolling } from "./lib/usePolling.js";
 
 type HostStatsResponse = HostsSnapshot & {
   thresholds: Thresholds;
   sample_interval_seconds?: number;
   history_window_seconds?: number;
   ui_refresh_seconds?: number;
+  sampled_at?: string;
 };
 
 const DEFAULT_WINDOW_SECONDS = 1800;
 const DEFAULT_REFRESH_SECONDS = 2;
 
-/** Re-fetch the newest snapshot on the configured cadence. */
-function useSnapshotRefresh(refresh: () => void, seconds: number) {
-  useEffect(() => {
-    const timer = setInterval(refresh, Math.max(1, seconds) * 1000);
-    return () => clearInterval(timer);
-  }, [refresh, seconds]);
-}
+/** Stable params object: a fresh `{}` each render could re-trigger the fetch. */
+const NO_PARAMS: Record<string, never> = {};
 
 export function SystemStatsPage({ context: _context }: PluginPageProps): ReactNode {
   const refresh = usePluginAction("refresh");
   const [selected, setSelected] = useState<string | null>(null);
-  const { data, loading, error, refresh: reload } = usePluginData<HostStatsResponse>("host-stats", {});
+  const { data, loading, error, refresh: reload } = usePluginData<HostStatsResponse>("host-stats", NO_PARAMS);
 
   const refreshSeconds = data?.ui_refresh_seconds ?? DEFAULT_REFRESH_SECONDS;
   const windowMs = (data?.history_window_seconds ?? DEFAULT_WINDOW_SECONDS) * 1000;
-  useSnapshotRefresh(reload, refreshSeconds);
+
+  // Headline numbers + tables: refetch the newest snapshot on the configured cadence.
+  usePolling(reload, refreshSeconds);
 
   const hosts = useMemo(() => data?.hosts ?? [], [data]);
   const host = useMemo(
@@ -62,7 +61,8 @@ export function SystemStatsPage({ context: _context }: PluginPageProps): ReactNo
         <h1 style={{ margin: 0, fontSize: 20 }}>System</h1>
         <LiveIndicator collectedAt={data.collected_at} error={host?.error ?? null} />
         <span style={{ opacity: 0.7, fontSize: 12 }}>
-          {series.length} point{series.length === 1 ? "" : "s"} / last {Math.round(windowMs / 60000)}m
+          {series.length} point{series.length === 1 ? "" : "s"} / last {Math.round(windowMs / 60000)}m · sampled{" "}
+          {age(data.sampled_at ?? data.collected_at)}
         </span>
         <button type="button" onClick={() => void refresh({}).catch(() => undefined)} style={{ marginLeft: "auto" }}>
           Refresh

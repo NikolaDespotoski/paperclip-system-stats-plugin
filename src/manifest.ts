@@ -4,7 +4,7 @@ import { CONFIG_SCHEMA } from "./config.js";
 export const PLUGIN_ID = "paperclip.system-stats";
 export const PLUGIN_VERSION = "0.1.0";
 export const ROUTE = "system-stats";
-export const JOB_KEY = "prune-samples";
+export const JOB_KEY = "sample-and-prune";
 export const WEBHOOK_ENDPOINT = "host-stats";
 export const STATE_NAMESPACE = "stats";
 
@@ -33,11 +33,12 @@ const manifest: PaperclipPluginManifestV1 = {
   jobs: [
     {
       jobKey: JOB_KEY,
-      displayName: "Prune samples",
-      description: "Trims the rolling time series to history_window_seconds and persists the surviving window.",
-      // Retention sweep once a minute. The sampling loop itself runs in the
-      // proactive worker via setInterval (cron granularity is one minute, which
-      // is too coarse for the realtime graphs).
+      displayName: "Sample and prune",
+      description: "Collects every host once and trims the rolling time series to history_window_seconds.",
+      // Supervised heartbeat: the near-realtime cadence comes from the worker's
+      // own timer plus sample-on-read, but this guarantees one collection a
+      // minute even if the worker process is recycled. Cron is 1-minute
+      // granularity, which is too coarse to be the only source.
       schedule: "*/1 * * * *",
     },
   ],

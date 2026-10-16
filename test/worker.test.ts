@@ -65,11 +65,30 @@ describe("system stats worker", () => {
     h.setConfig({ ...NO_POLL, remote_hosts: [WEBHOOK_HOST] });
     await plugin.definition.onWebhook!(webhookInput("resolved:s3cr3t"));
 
-    await h.runJob("prune-samples");
+    await h.runJob("sample-and-prune");
 
     const persisted = h.getState(seriesScope("gpu-box")) as SeriesPoint[] | undefined;
     expect(persisted).toHaveLength(1);
     expect(persisted?.[0]?.cpu_pct).toBe(42);
+  });
+
+  it("collects on read when the newest sample is stale", async () => {
+    expect(h.getState(snapshotScope())).toBeUndefined();
+    // A non-zero interval makes reads responsible for freshness.
+    h.setConfig({ sample_interval_seconds: 5 });
+
+    await h.getData<HostsSnapshot>("host-stats", {});
+    expect(h.getState(snapshotScope())).toBeDefined();
+
+    // A second read inside the interval must reuse the sample, not collect again.
+    await h.getData<HostsSnapshot>("host-stats", {});
+    const collected = h.logs.filter((entry) => entry.meta?.trigger === "read:host-stats");
+    expect(collected).toHaveLength(1);
+  });
+
+  it("does not collect on read when the interval is disabled", async () => {
+    await h.getData<HostsSnapshot>("host-stats", {});
+    expect(h.getState(snapshotScope())).toBeUndefined();
   });
 
   it("records a raw series point for a pushed webhook host", async () => {

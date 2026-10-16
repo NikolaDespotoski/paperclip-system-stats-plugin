@@ -52,8 +52,12 @@ jobs:
 
       - name: Determine next version
         id: version
+        # Pass the message through the environment rather than interpolating it
+        # into the script: a body containing a double quote or a backtick would
+        # otherwise terminate the quoting and execute the rest of the message.
+        env:
+          MSG: ${{ github.event.head_commit.message }}
         run: |
-          MSG="${{ github.event.head_commit.message }}"
           BUMP=patch
           if grep -qi '#major' <<<"$MSG"; then
             BUMP=major

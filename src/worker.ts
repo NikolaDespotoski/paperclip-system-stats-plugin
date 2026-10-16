@@ -34,6 +34,8 @@ const SPARKLINE_MAX = 180;
 let workerCtx: PluginContext | null = null;
 let timer: NodeJS.Timeout | null = null;
 let sampling = false;
+/** Timestamp of the last successful collection, used for staleness checks. */
+let lastSampleAt = 0;
 const buffers = new RingBuffer();
 
 function requireCtx(): PluginContext {
@@ -90,7 +92,8 @@ async function sample(trigger: string): Promise<{ collected_at: string; hosts: n
     const window = windowMs(config);
     const snapshot = await collectAllHosts(config, ctx.logger);
     await storeSnapshot(ctx, snapshot);
-    const now = Date.now();
+    lastSampleAt = Date.now();
+    const now = lastSampleAt;
     for (const host of snapshot.hosts) {
       if (!host.available) continue;
       buffers.push(host.id, toSeriesPoint(host), window, now);
@@ -101,6 +104,25 @@ async function sample(trigger: string): Promise<{ collected_at: string; hosts: n
   } finally {
     sampling = false;
   }
+}
+
+/**
+ * Collect only when the newest sample is older than `sample_interval_seconds`.
+ *
+ * The charts must not depend on the worker process staying alive (it can be
+ * recycled between invocations, taking the interval timer with it), so every
+ * read of the data feeds first makes the data fresh. Cheaper than it sounds:
+ * a single collection covers all hosts, `sampling` collapses concurrent
+ * requests, and `lastSampleAt` is seeded from the persisted snapshot at boot so
+ * the first paint after a restart is not blocked.
+ *
+ * A configured interval of `0` means "operator drives sampling" — reads then
+ * never collect; the cron sweep and the Refresh button still do.
+ */
+async function ensureFresh(config: PluginConfig, reason: string): Promise<void> {
+  if (config.sample_interval_seconds <= 0 || sampling) return;
+  if (Date.now() - lastSampleAt < config.sample_interval_seconds * 1000) return;
+  await sample(reason).catch(() => undefined);
 }
 
 /** Merge the newest SSH/local snapshot with freshly pushed webhook hosts. */
@@ -139,10 +161,15 @@ const plugin = definePlugin({
     // Fresh bootstrap: drop any in-process history, then re-hydrate what was persisted.
     buffers.clear();
     await buffers.hydrate(ctx, knownHostIds(config), windowMs(config), Date.now());
+    // Seed freshness from the persisted snapshot so a restart does not make the
+    // very first read block on a full collection.
+    const boot = await readSnapshot(ctx);
+    lastSampleAt = boot ? Date.parse(boot.collected_at) || 0 : 0;
 
     // --- Latest snapshot (headline numbers + detailed tables) ---
     ctx.data.register("host-stats", async () => {
       const cfg = await loadConfig(ctx);
+      await ensureFresh(cfg, "read:host-stats");
       const { hosts, collected_at } = await currentHosts(ctx, cfg);
       return {
         hosts,
@@ -151,12 +178,14 @@ const plugin = definePlugin({
         sample_interval_seconds: cfg.sample_interval_seconds,
         history_window_seconds: cfg.history_window_seconds,
         ui_refresh_seconds: cfg.ui_refresh_seconds,
+        sampled_at: new Date(lastSampleAt).toISOString(),
       };
     });
 
     // --- Full rolling window for one host (initial chart load) ---
     ctx.data.register("host-series", async (params): Promise<HostSeries> => {
       const cfg = await loadConfig(ctx);
+      await ensureFresh(cfg, "read:host-series");
       const { hostId, windowMs: requested } = (params ?? {}) as { hostId?: string; windowMs?: number };
       const window = requested ?? windowMs(cfg);
       return { hostId: hostId ?? "", windowMs: window, points: buffers.window(hostId ?? "", window, Date.now()) };
@@ -165,6 +194,7 @@ const plugin = definePlugin({
     // --- Downsampled arrays for the dashboard-widget sparklines ---
     ctx.data.register("host-sparklines", async (): Promise<SparklinePayload> => {
       const cfg = await loadConfig(ctx);
+      await ensureFresh(cfg, "read:host-sparklines");
       const now = Date.now();
       const window = windowMs(cfg);
       const hosts = knownHostIds(cfg)
@@ -184,6 +214,7 @@ const plugin = definePlugin({
     // --- Incremental delta (realtime chart append) ---
     ctx.actions.register("series-since", async (params): Promise<{ hostId: string; points: SeriesPoint[] }> => {
       const cfg = await loadConfig(ctx);
+      await ensureFresh(cfg, "read:series-since");
       const { hostId, sinceTs } = (params ?? {}) as { hostId?: string; sinceTs?: number };
       if (!hostId) return { hostId: "", points: [] };
       return { hostId, points: buffers.since(hostId, sinceTs ?? 0, windowMs(cfg), Date.now()) };
@@ -192,9 +223,12 @@ const plugin = definePlugin({
     // --- Force an immediate sample ---
     ctx.actions.register("refresh", async () => ({ ok: true, ...(await sample("manual")) }));
 
-    // --- Retention: trim every buffer to the window and persist it. ---
+    // --- Supervised heartbeat: sample, then trim every buffer to the window. ---
+    // Runs regardless of the interval so a host whose worker gets recycled
+    // still receives one sample a minute.
     ctx.jobs.register(JOB_KEY, async () => {
       const cfg = await loadConfig(ctx);
+      await sample("cron").catch(() => undefined);
       const window = windowMs(cfg);
       const now = Date.now();
       for (const id of buffers.hostIds()) buffers.trim(id, window, now);

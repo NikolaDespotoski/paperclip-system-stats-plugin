@@ -76,7 +76,7 @@ Configured in **Settings → Plugins → System Stats**. The schema is also in [
 
 | Key | Default | Meaning |
 |---|---|---|
-| `sample_interval_seconds` | `5` | How often the worker records one raw sample per host. Minimum 2; `0` disables the sampling timer (the retention job still runs, and `Refresh` still collects on demand). |
+| `sample_interval_seconds` | `5` | How often the worker records one raw sample per host. Minimum 2; `0` disables timer and on-read sampling (the once-a-minute sweep and `Refresh` still collect). |
 | `history_window_seconds` | `1800` | Retention window for the rolling series, in seconds (minimum 60). |
 | `ui_refresh_seconds` | `2` | How often the open page fetches the newest snapshot and appends new chart points. |
 | `include_loopback_interfaces` | `false` | Include `lo` in the network card. |
@@ -100,10 +100,17 @@ company-scoped, while this plugin's sampler is instance-wide with no active
 company invocation, so `ctx.db` is not reachable from the sampling loop. If you
 lose `ctx.state`, the worst case is a cold-start graph — never a crash.
 
-The `prune-samples` manifest job runs once a minute to trim each buffer to the
-window and re-persist it. The sampling loop itself is a `setInterval` in the
-worker (cron granularity of one minute is too coarse for a 30-minute live
-graph).
+Sampling is driven from three places, so the graphs stay live even if the worker
+process is recycled and loses its timer:
+
+1. a `setInterval` in the worker, every `sample_interval_seconds`;
+2. **on read** — whenever the UI asks for stats and the newest sample is older
+   than `sample_interval_seconds`, one collection runs first;
+3. the `sample-and-prune` manifest job, once a minute, which collects and then
+   trims each buffer to the window.
+
+A `sample_interval_seconds` of `0` turns off (1) and (2); the once-a-minute job
+and the **Refresh** button still collect.
 
 ### Remote hosts
 
