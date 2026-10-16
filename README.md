@@ -30,15 +30,43 @@ Collection never throws: a missing tool becomes an empty section, and a missing 
 
 ## Install
 
-The plugin runs on the same machine as the Paperclip host (it reads local `/proc`). It needs Node ≥ 24.11.
+The plugin must run on the same machine as the Paperclip host, because it reads that host's `/proc`, `df`, `ps` and `docker`. It needs **Node ≥ 24.11** and a Linux host (a macOS/Windows host is reported as unavailable rather than crashing).
+
+### From npm
 
 ```sh
-npm ci            # or npm install
+npx paperclipai plugin install paperclip-plugin-system-stats
+```
+
+### From a local checkout (development)
+
+```sh
+git clone https://github.com/NikolaDespotoski/paperclip-system-stats-plugin.git
+cd paperclip-system-stats-plugin
+npm ci
 npm run build
 paperclipai plugin install "$(pwd)"
 ```
 
-To publish for other instances, publish the package to your registry and install by name.
+### From a git URL
+
+```sh
+paperclipai plugin install github:NikolaDespotoski/paperclip-system-stats-plugin
+```
+
+### After installing
+
+1. Go to **Settings → Plugins → System Stats** and enable it.
+2. Adjust `poll_interval_seconds`, `remote_hosts` and `thresholds` (see [Configuration](#configuration)).
+3. Open the **System** page in the sidebar, or find the **Host Health** widget on the dashboard.
+
+## Releasing
+
+Every merge to `main` runs [`.github/workflows/release.yml`](.github/workflows/release.yml): it typechecks, tests and builds, then bumps the version, publishes to npm and tags a GitHub release.
+
+- The default bump is a **patch**; include `#minor` or `#major` in the merge commit message to bump further.
+- Add an `NPM_TOKEN` repository secret (an npm access token with publish rights) to enable the npm publish step. Without it, the workflow still tags a GitHub release.
+
 
 ## Configuration
 

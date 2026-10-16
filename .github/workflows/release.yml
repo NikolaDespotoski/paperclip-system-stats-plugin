@@ -1,0 +1,68 @@
+name: Release
+
+# Runs on every merge to main: builds, tests, bumps the version, publishes to
+# npm and cuts a GitHub release + tag. Tag pushes do not re-trigger this.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          BUMP=patch
+          if grep -qi '#major' <<<"$MSG"; then
+            BUMP=major
+          elif grep -qi '#minor' <<<"$MSG"; then
+            BUMP=minor
+          fi
+          echo "bump=$BUMP" >>"$GITHUB_OUTPUT"
+
+      - name: Bump version
+        run: npm version "${{ steps.bump.outputs.bump }}" --no-git-tag-version
+
+      - name: Publish to npm
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          git tag "v$VERSION" 2>/dev/null || echo "tag v$VERSION already exists"
+          git push origin "v$VERSION" 2>/dev/null || echo "tag v$VERSION already pushed"
+          gh release create "v$VERSION" --generate-notes --title "v$VERSION" || echo "release v$VERSION already exists"
