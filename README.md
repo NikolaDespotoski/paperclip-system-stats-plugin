@@ -1,0 +1,1 @@
+# paperclip-system-stats-plugin
