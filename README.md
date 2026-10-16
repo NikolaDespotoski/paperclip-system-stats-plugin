@@ -9,6 +9,16 @@ Real-time CPU, RAM, disk, network and Docker monitoring for the Paperclip host a
 
 The page appends new samples every `ui_refresh_seconds` (default 2) and keeps a rolling `history_window_seconds` window (default 1800, i.e. 30 minutes) per host. A **Refresh** button forces a collection immediately.
 
+## Screenshots
+
+The dashboard widget draws one line per headline metric — CPU, RAM and disk — for every host, with ok / warn / crit colouring on both the value and the line. An unreachable host shows dashes instead of a phantom `0%`:
+
+![Host health dashboard widget](docs/screenshots/widget-wide.png)
+
+The same rows reflow cleanly in a narrow dashboard slot:
+
+![Host health widget in a narrow slot](docs/screenshots/widget-narrow.png)
+
 ## Data gathered
 
 | Metric | Source |
